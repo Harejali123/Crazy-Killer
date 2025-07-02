@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Tic Tac Toe 1v1</title>
+  <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
+  <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', sans-serif;
+      background: #0d1117;
+      color: white;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+
+    #gameContainer {
+      background: #161b22;
+      padding: 20px;
+      border-radius: 20px;
+      box-shadow: 0 0 20px rgba(0,255,255,0.2);
+      text-align: center;
+      max-width: 400px;
+      width: 90%;
+    }
+
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    #micStatus {
+      font-weight: bold;
+      transition: color 0.3s ease;
+    }
+
+    #roomControls input, #roomControls button {
+      margin: 5px;
+      padding: 8px;
+      border-radius: 10px;
+      border: none;
+      font-size: 14px;
+    }
+
+    #gameBoard {
+      display: grid;
+      grid-template-columns: repeat(3, 100px);
+      gap: 5px;
+      margin: 20px auto;
+    }
+
+    .cell {
+      width: 100px;
+      height: 100px;
+      background: #21262d;
+      border-radius: 12px;
+      font-size: 40px;
+      line-height: 100px;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.2s;
+      user-select: none;
+      text-transform: uppercase;
+      text-align: center;
+    }
+
+    .cell:hover {
+      background: #2ea043;
+      transform: scale(1.05);
+    }
+
+    #winnerDialog {
+      background: #222;
+      color: #fff;
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 0 10px lime;
+      position: fixed;
+      top: 30%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      display: none;
+    }
+  </style>
+</head>
+<body>
+<div id="gameContainer">
+  <h1>🎮 Tic Tac Toe</h1>
+  <div class="top-bar">
+    <span id="myCoins">My Coins: 1000</span>
+    <span id="micStatus">Mic: Inactive</span>
+  </div>
+  <div id="roomControls">
+    <input type="text" id="roomIdInput" placeholder="Room ID">
+    <input type="number" id="betInput" placeholder="Bet Coins" />
+    <button onclick="createRoom()">Create Room</button>
+    <button onclick="joinRoom()">Join Room</button>
+  </div>
+  <div id="gameBoard">
+    <div class="cell" data-index="0"></div>
+    <div class="cell" data-index="1"></div>
+    <div class="cell" data-index="2"></div>
+    <div class="cell" data-index="3"></div>
+    <div class="cell" data-index="4"></div>
+    <div class="cell" data-index="5"></div>
+    <div class="cell" data-index="6"></div>
+    <div class="cell" data-index="7"></div>
+    <div class="cell" data-index="8"></div>
+  </div>
+  <p id="statusText">Create or Join a room to start</p>
+</div>
+
+<div id="winnerDialog">🎉 Congratulations! You Win!</div>
+
+<audio id="remoteAudio" autoplay playsinline></audio>
+
+<script>
+  // Firebase config
+  const firebaseConfig = {
+    apiKey: "AIzaSyAa4PBgmsvy7ffmAEWV4ZtFPI5KpWKsSBk",
+    authDomain: "bgmi-turnament-c8007.firebaseapp.com",
+    databaseURL: "https://bgmi-turnament-c8007-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "bgmi-turnament-c8007",
+    storageBucket: "bgmi-turnament-c8007.appspot.com",
+    messagingSenderId: "136711794362",
+    appId: "1:136711794362:web:bc9c719846a97449fa5c83"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+
+  let roomId, playerSymbol, currentTurn = 'X', myCoins = 1000;
+  const cells = document.querySelectorAll('.cell');
+  const statusText = document.getElementById('statusText');
+  const micStatus = document.getElementById('micStatus');
+  const coinDisplay = document.getElementById('myCoins');
+  const winnerDialog = document.getElementById('winnerDialog');
+
+  function createRoom() {
+    roomId = document.getElementById('roomIdInput').value;
+    const bet = parseInt(document.getElementById('betInput').value);
+    if (!roomId || !bet) return alert("Room ID and bet required");
+
+    db.ref(`rooms/${roomId}`).set({
+      board: Array(9).fill(""),
+      turn: 'X',
+      bet: bet,
+      playerX: true
+    });
+
+    playerSymbol = 'X';
+    setupRoomListener();
+    startMicCall();
+    statusText.textContent = "Room created. Waiting for friend...";
+  }
+
+  function joinRoom() {
+    roomId = document.getElementById('roomIdInput').value;
+    db.ref(`rooms/${roomId}`).once('value', snap => {
+      if (!snap.exists()) return alert("Room doesn't exist");
+      db.ref(`rooms/${roomId}/playerO`).set(true);
+      playerSymbol = 'O';
+      setupRoomListener();
+      joinMicCall();
+    });
+  }
+
+  function setupRoomListener() {
+    db.ref(`rooms/${roomId}`).on('value', snap => {
+      const data = snap.val();
+      if (!data) return;
+
+      currentTurn = data.turn;
+      data.board.forEach((val, i) => {
+        cells[i].textContent = val;
+      });
+
+      statusText.textContent = currentTurn === playerSymbol ? "Your Turn" : "Opponent's Turn";
+
+      const winner = checkWinner(data.board);
+      if (winner) {
+        statusText.textContent = `${winner} wins!`;
+        db.ref(`rooms/${roomId}`).off();
+        if (winner === playerSymbol) {
+          myCoins += data.bet;
+          showWinDialog();
+        } else {
+          myCoins -= data.bet;
+        }
+        coinDisplay.textContent = `My Coins: ${myCoins}`;
+        cleanupCall();
+        db.ref(`rooms/${roomId}`).remove();
+        db.ref(`micRooms/${roomId}`).remove();
+      }
+    });
+  }
+
+  function showWinDialog() {
+    winnerDialog.style.display = "block";
+    setTimeout(() => {
+      winnerDialog.style.display = "none";
+    }, 3000);
+  }
+
+  cells.forEach((cell, index) => {
+    cell.onclick = () => {
+      if (!roomId) return;
+      db.ref(`rooms/${roomId}`).once('value', snap => {
+        const data = snap.val();
+        if (data.turn !== playerSymbol || data.board[index]) return;
+        data.board[index] = playerSymbol;
+        data.turn = playerSymbol === 'X' ? 'O' : 'X';
+        db.ref(`rooms/${roomId}`).update(data);
+      });
+    };
+  });
+
+  function checkWinner(board) {
+    const winLines = [
+      [0,1,2],[3,4,5],[6,7,8],
+      [0,3,6],[1,4,7],[2,5,8],
+      [0,4,8],[2,4,6]
+    ];
+    for (let [a,b,c] of winLines) {
+      if (board[a] && board[a] === board[b] && board[b] === board[c]) {
+        return board[a];
+      }
+    }
+    return null;
+  }
+
+  // MIC CALL SETUP
+  let localStream, peerConnection;
+  const remoteAudio = document.getElementById("remoteAudio");
+  const remoteStream = new MediaStream();
+  remoteAudio.srcObject = remoteStream;
+
+  const servers = {
+    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+  };
+
+  const constraints = { audio: true, video: false };
+
+  async function startMicCall() {
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      peerConnection = new RTCPeerConnection(servers);
+
+      localStream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, localStream);
+      });
+
+      peerConnection.ontrack = event => {
+        remoteStream.addTrack(event.track);
+      };
+
+      const roomRef = db.ref(`micRooms/${roomId}`);
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      roomRef.set({ offer: offer });
+
+      roomRef.on('value', async snap => {
+        const data = snap.val();
+        if (data && data.answer && !peerConnection.currentRemoteDescription) {
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+        }
+      });
+
+      peerConnection.onicecandidate = event => {
+        if (event.candidate) {
+          db.ref(`micRooms/${roomId}/candidates`).push(event.candidate.toJSON());
+        }
+      };
+
+      db.ref(`micRooms/${roomId}/candidates`).on('child_added', async snap => {
+        const candidate = new RTCIceCandidate(snap.val());
+        await peerConnection.addIceCandidate(candidate);
+      });
+
+      micStatus.textContent = "Mic: Active";
+      micStatus.style.color = "lime";
+    } catch (err) {
+      micStatus.textContent = "Mic: Error";
+      console.error(err);
+    }
+  }
+
+  async function joinMicCall() {
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      peerConnection = new RTCPeerConnection(servers);
+
+      localStream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, localStream);
+      });
+
+      peerConnection.ontrack = event => {
+        remoteStream.addTrack(event.track);
+      };
+
+      const roomRef = db.ref(`micRooms/${roomId}`);
+      const snapshot = await roomRef.get();
+      const offer = snapshot.val().offer;
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      await roomRef.update({ answer: answer });
+
+      peerConnection.onicecandidate = event => {
+        if (event.candidate) {
+          db.ref(`micRooms/${roomId}/candidates`).push(event.candidate.toJSON());
+        }
+      };
+
+      db.ref(`micRooms/${roomId}/candidates`).on('child_added', async snap => {
+        const candidate = new RTCIceCandidate(snap.val());
+        await peerConnection.addIceCandidate(candidate);
+      });
+
+      micStatus.textContent = "Mic: Active";
+      micStatus.style.color = "lime";
+    } catch (err) {
+      micStatus.textContent = "Mic: Error";
+      console.error(err);
+    }
+  }
+
+  function cleanupCall() {
+    if (peerConnection) peerConnection.close();
+    if (localStream) {
+      localStream.getTracks().forEach(track => track.stop());
+    }
+    micStatus.textContent = "Mic: Inactive";
+    micStatus.style.color = "white";
+  }
+
+  window.addEventListener('beforeunload', () => {
+    cleanupCall();
+    if (roomId) {
+      db.ref(`rooms/${roomId}`).remove();
+      db.ref(`micRooms/${roomId}`).remove();
+    }
+  });
+</script>
+</body>
+</html>
